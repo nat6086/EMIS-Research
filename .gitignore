@@ -1,0 +1,42 @@
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment configuration
+.env
+.env.*
+!.env.example
+
+# IDE and operating system files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+
+# Datasets and original audio
+data/raw/
+data/interim/
+data/processed/
+
+# Model checkpoints and weights
+models/checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Generated experiment artifacts
+outputs/
+runs/
+logs/
