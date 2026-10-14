@@ -40,3 +40,6 @@ models/checkpoints/
 outputs/
 runs/
 logs/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
