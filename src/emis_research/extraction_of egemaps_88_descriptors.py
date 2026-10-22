@@ -1,5 +1,8 @@
 """Extracció d'eGeMAPSv02 (Functionals, 88 descriptors) amb openSMILE + QC de features.
 
+Per executar:
+& c:/Users/nmord/EMIS-Research/.venv/Scripts/python.exe c:/Users/nmord/EMIS-Research/src/emis_research/egemaps_88_descriptors.py --sr16-check
+
 Només lectura sobre l'àudio: cap normalització, retall ni filtratge. Es llegeix el WAV
 del ZIP a la seva freqüència nativa (24 kHz) i es converteix a mono només si cal.
 Sortida: CSV amb audio_id + 88 columnes, i un JSON amb la traçabilitat.
