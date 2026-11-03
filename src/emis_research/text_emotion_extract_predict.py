@@ -1,40 +1,24 @@
-"""Extracció de sortides de models d'emoció textual sobre els textos ÚNICS d'EMIS (sense fine-tuning).
+"""
 
-Per executar (exemple):
-python src/emis_research/text_emotion_extraction.py --models hartmann_large hartmann_distil go_emotions deberta_zeroshot qwen3_4b
+PAS 1 de 2 — Extracció de probabilitats d'emoció a partir del text (sense fine-tuning).
+ 
+Per a cada text únic d'EMIS, models preentrenats donen una probabilitat per a angry, happy,
+neutral i sad. L'únic input dels models és el text; l'etiqueta només serveix per comprovar coherència.
+  - Classificadors: hartmann_large, hartmann_distil, go_emotions, emoberta_large (etiquetes natives
+    agrupades en les 4 d'EMIS).
+  - Zero-shot NLI: deberta_zeroshot (P(entailment) de "The speaker feels <emoció>.").
+  - LLM: qwen3_4b, qwen3_8b (probabilitat de la resposta, sense generar text).
+ 
+Genera a outputs/text_baseline/:
+  features/<model>.csv   Un per model: text, p_angry/p_happy/p_neutral/p_sad (sumen 1) i
+                         puntuacions originals raw_*. ÉS L'ENTRADA DEL PAS 2.
+  run_meta.json          Metadades de l'execució (versions, prompts, mapatges, temps).
+  model_revisions.json   Commit SHA de cada model de Hugging Face, per reproduir-ho.
+ 
+Dependències: data/processed/emis_manifest.csv (text, text_id, text_category, text_emotion);
+torch, transformers, huggingface_hub, numpy, pandas; internet la primera vegada; GPU recomanada.
+Següent pas: text_emotion_zero_shot.py.
 
-FLUX GENERAL
-------------
-  manifest.csv ──► textos únics ──► per cada model: carregar checkpoint fixat ──► inferència sobre `text`
-                                      ──► 4 puntuacions (angry/happy/neutral/sad) ──► p_* (sumen 1)
-                                      ──► features/<model>.csv  +  run_meta.json
-
-  Tres famílies de models, cadascuna amb la seva funció `run_*` (totes retornen el mateix format):
-    "cls"  run_cls : classificador d'emocions ja entrenat (Hartmann, GoEmotions, EmoBERTa).
-                     Dona probabilitats per les SEVES emocions; nosaltres les agrupem en les 4 d'EMIS.
-    "nli"  run_nli : model d'inferència textual (DeBERTa). Pregunta "el text implica 'The speaker feels sad'?"
-                     per cada emoció i ens quedem amb la probabilitat d'`entailment`.
-    "llm"  run_llm : LLM generatiu (Qwen). Es mira quina probabilitat té de començar la resposta per cada
-                     emoció; no es genera text.
-
-  Totes tres retornen (R, S, info):
-    R    = sortides natives del model (columnes raw_*), només per traçabilitat
-    S    = 1 puntuació per emoció d'EMIS (angry, happy, neutral, sad), sense normalitzar
-    info = diccionari que va a run_meta.json (mapatges, prompts, etc.)
-  Després `normalise` converteix S en p_* (sumen 1 per fila) i es desa el CSV.
-
-Restriccions (anti data-leakage):
-  * L'únic input de cada model és la cadena literal `text`. Cap altra columna entra a la inferència.
-  * Cada frase única (cadena exacta) s'avalua una sola vegada, encara que surti en molts àudios.
-  * El mapatge model -> {angry, happy, neutral, sad} i els prompts estan fixats AQUÍ, a priori.
-    Canviar-los després de veure resultats sobre EMIS és ajust post-hoc i s'ha de reportar com a tal.
-  * Les revisions (commit SHA) dels checkpoints es resolen a la primera execució i es desen a
-    model_revisions.json; les execucions posteriors les reutilitzen (commiteja aquest fitxer).
-
-Sortida (outputs/text_baseline/):
-  features/<model>.csv   text, text_category, text_id (només traçabilitat), p_angry..p_sad (sumen 1),
-                         raw_* (sortides natives del model)
-  run_meta.json          versions, checkpoints, revisions, prompts, mapatges, seed, dispositiu
 """
 import argparse
 import hashlib

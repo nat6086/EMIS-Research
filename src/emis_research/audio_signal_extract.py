@@ -1,8 +1,19 @@
 """QC d'àudio d'EMIS (només lectura). No modifica ni elimina cap mostra.
 
-Calcula per fitxer: sr, canals, durada, pic, fracció de clipping, RMS (dBFS),
-offset DC, silenci inicial/final i fracció de frames de baixa energia.
-Les banderes són heurístiques descriptives, NO criteris d'exclusió.
+Sí. Aquest script genera outputs/qc/audio_qc.csv, que s'utilitza a qc_shortcuts.py 
+(el baseline trivial que hem analitzat anteriorment).
+
+Aquest fitxer proporciona els 6 descriptors acústics bàsics:
+- Durada (duration_s)
+- Nivell RMS (rms_dbfs)
+- Fracció de baixa energia (low_energy_frac)
+- Silenci inicial (lead_sil_s)
+- Silenci final (trail_sil_s)
+- Pic d'amplitud (peak)
+També utilitza flag_long_edge_sil per analitzar els silencis.
+
+Conclusió: audio_qc.csv és necessari per executar qc_shortcuts.py, que avalua fins 
+a quin punt es pot predir l'emoció utilitzant només característiques acústiques superficials.
 """
 import argparse
 import io

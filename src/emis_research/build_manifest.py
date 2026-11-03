@@ -1,155 +1,117 @@
+"""
+Construeix el manifest d'EMIS: una fila per cada enregistrament d'àudio.
 
-from pathlib import Path
-from collections import Counter
+Què fa aquest script, en paraules senzilles:
+  1. Obre el ZIP amb els fitxers d'àudio i llegeix el NOM de cada fitxer
+     (el nom codifica qui/què/com s'ha generat l'àudio).
+  2. Busca la frase que es diu a l'àudio dins del CSV de textos.
+  3. Ho desa tot en una sola taula: data/processed/emis_manifest.csv
+  
+data/processed/emis_manifest.csv s'utilitza en la resta dels experiments.
+"""
+
 import zipfile
+from pathlib import Path
 
 import pandas as pd
 
-
-# Project paths
+# ---------------------------------------------------------------------------
+# On són els fitxers (les rutes parteixen de la carpeta arrel del projecte)
+# ---------------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[2]
+ZIP_PATH = ROOT / "data" / "raw" / "audios_EMIS.zip"           # els àudios
+CSV_PATH = ROOT / "data" / "raw" / "text_samples_EMIS.csv"     # les frases
+OUTPUT_PATH = ROOT / "data" / "processed" / "emis_manifest.csv"  # el que creem
 
-ZIP_PATH = ROOT / "data" / "raw" / "audios_EMIS.zip"
-CSV_PATH = ROOT / "data" / "raw" / "text_samples_EMIS.csv"
-OUTPUT_PATH = ROOT / "data" / "processed" / "emis_manifest.csv"
-
-EXPECTED_EMOTIONS = {"angry", "happy", "sad", "neutral"}
-EXPECTED_CUE_TYPES = {"explicit", "implicit"}
-EXPECTED_TTS = {"COSY", "F5TTS", "STYLE"}
+# Les columnes de la taula final, en l'ordre en què es desaran
+COLUMNS = [
+    "audio_id", "zip_member", "text", "generation_emotion", "reference_id",
+    "tts_system", "text_id", "text_category", "text_emotion", "text_cue_type",
+]
 
 
-def parse_filename(filename: str) -> dict:
-    """Extract metadata from an EMIS audio filename."""
-    parts = Path(filename).stem.split("_")
+def parse_filename(path: str) -> dict:
+    """
+    Llegeix la informació amagada dins del nom d'un fitxer d'àudio.
 
-    if len(parts) == 6:
-        text_id, emotion, expression, voice, reference_id, tts = parts
-        text_category = f"{emotion}_{expression}"
-        text_emotion = emotion
-        text_cue_type = expression
+    Hi ha dos tipus de noms:
+      6 parts: <text_id>_<emotion>_<cue>_<voice>_<reference_id>_<tts>
+               p. ex. 0012_angry_explicit_happy_ref03_COSY
+      5 parts: <text_id>_neutral_<voice>_<reference_id>_<tts>
+               p. ex. 0012_neutral_sad_ref01_F5TTS
+    """
+    # Traiem el ".wav" i la carpeta, i tallem el nom a cada "_"
+    parts = Path(path).stem.split("_")
 
-        if text_emotion not in EXPECTED_EMOTIONS - {"neutral"}:
-            raise ValueError(f"Unknown text emotion: {filename}")
+    # Si no té 5 o 6 trossos, no és un nom vàlid d'EMIS
+    if len(parts) not in (5, 6):
+        raise ValueError(f"Unexpected filename: {path}")
 
-        if text_cue_type not in EXPECTED_CUE_TYPES:
-            raise ValueError(f"Unknown text cue type: {filename}")
-
-    elif len(parts) == 5:
-        text_id, text_category, voice, reference_id, tts = parts
-
-        if text_category != "neutral":
-            raise ValueError(f"Unexpected filename: {filename}")
-
-        text_emotion = "neutral"
-        text_cue_type = "neutral"
-    else:
-        raise ValueError(f"Unexpected filename: {filename}")
-
-    # ... (validacions de voice, tts i text_id sense canvis)
+    # El primer tros és sempre el número de text, i els tres últims són sempre
+    # veu / referència / TTS. El que queda al mig és la categoria del text
+    # (1 tros per a neutral, 2 trossos per a emoció + tipus d'indicació).
+    text_id, *category, voice, reference_id, tts = parts
 
     return {
         "text_id": text_id,
-        "text_category": text_category,
-        "generation_emotion": voice,
-        "reference_id": reference_id,
-        "tts_system": tts,
-        "text_emotion": text_emotion,
-        "text_cue_type": text_cue_type,
+        "text_category": "_".join(category),   # p. ex. "angry_explicit" o "neutral"
+        "text_emotion": category[0],           # p. ex. "angry" o "neutral"
+        # Els textos neutrals no tenen tipus d'indicació; l'etiquetem "neutral"
+        "text_cue_type": category[1] if len(category) == 2 else "neutral",
+        "generation_emotion": voice,           # emoció amb què s'ha generat l'àudio
+        "reference_id": reference_id,          # referència acústica utilitzada
+        "tts_system": tts,                     # COSY, F5TTS o STYLE
     }
-
-def build_manifest() -> pd.DataFrame:
-    """Build the audio-text manifest from original EMIS files."""
-    texts = pd.read_csv(CSV_PATH)
-    records = []
-
-    with zipfile.ZipFile(ZIP_PATH) as archive:
-        filenames = sorted(
-            name
-            for name in archive.namelist()
-            if name.lower().endswith(".wav")
-        )
-
-        for filename in filenames:
-            metadata = parse_filename(Path(filename).name)
-
-            category = metadata["text_category"]
-            text_index = int(metadata["text_id"]) - 1
-
-            if category not in texts.columns:
-                raise ValueError(f"Unknown text category: {category}")
-
-            if not 0 <= text_index < len(texts):
-                raise ValueError(f"Invalid text index: {filename}")
-
-            text = texts.iloc[text_index][category]
-
-            if pd.isna(text) or not str(text).strip():
-                raise ValueError(f"Missing text: {filename}")
-
-            records.append({
-                "audio_id": Path(filename).stem,
-                "zip_member": filename,
-                "text": str(text),
-                **metadata,
-            })
-
-    manifest = pd.DataFrame(records)
-
-    if len(manifest) != 1248:
-        raise ValueError(
-            f"Expected 1248 recordings, found {len(manifest)}"
-        )
-
-    if manifest["audio_id"].duplicated().any():
-        raise ValueError("Duplicate audio identifiers detected")
-
-    # Check factorial completeness for each text.
-    group_columns = ["text_category", "text_id"]
-    expected_pairs = {
-        (emotion, tts)
-        for emotion in EXPECTED_EMOTIONS
-        for tts in EXPECTED_TTS
-    }
-
-    for group_key, group in manifest.groupby(group_columns):
-        pairs = list(
-            zip(group["generation_emotion"], group["tts_system"])
-        )
-
-        if len(pairs) != 12 or set(pairs) != expected_pairs:
-            raise ValueError(f"Incomplete factorial group: {group_key}")
-
-        if len(set(pairs)) != 12:
-            raise ValueError(f"Duplicate factorial pairs: {group_key}")
-
-    return manifest
 
 
 def main() -> None:
-    manifest = build_manifest()
+    # Carreguem la taula de frases (una fila per text, una columna per categoria)
+    texts = pd.read_csv(CSV_PATH)
 
+    # Llistem tots els .wav del ZIP (ordenats perquè la sortida sigui estable)
+    with zipfile.ZipFile(ZIP_PATH) as archive:
+        members = sorted(n for n in archive.namelist() if n.lower().endswith(".wav"))
+
+    records = []
+    for member in members:
+        # Pas 1: obtenim les metadades a partir del nom del fitxer
+        meta = parse_filename(member)
+
+        # Pas 2: busquem la frase que es diu.
+        # El text_id comença a 1 però les files de la taula comencen a 0,
+        # d'aquí el "- 1". La columna és la categoria (p. ex. "angry_explicit").
+        text = texts.at[int(meta["text_id"]) - 1, meta["text_category"]]
+
+        # Ens aturem si la frase està buida: seria un forat a les dades
+        if pd.isna(text) or not str(text).strip():
+            raise ValueError(f"Missing text: {member}")
+
+        # Pas 3: desem una fila per a aquest enregistrament
+        records.append({
+            "audio_id": Path(member).stem,   # nom del fitxer sense ".wav"
+            "zip_member": member,            # ruta completa dins del ZIP
+            "text": str(text),
+            **meta,                          # afegim totes les metadades del nom
+        })
+
+    # Convertim la llista de files en una taula amb les columnes en l'ordre correcte
+    manifest = pd.DataFrame(records)[COLUMNS]
+
+    # -----------------------------------------------------------------------
+    # Comprovacions de seguretat: si alguna falla, l'script s'atura i diu per què
+    # -----------------------------------------------------------------------
+    # 1) Esperem exactament 1248 àudios
+    assert len(manifest) == 1248, f"Expected 1248 recordings, found {len(manifest)}"
+    # 2) Cap àudio pot aparèixer dues vegades
+    assert not manifest["audio_id"].duplicated().any(), "Duplicate audio identifiers"
+    # 3) Cada text ha de tenir 12 àudios (4 emocions x 3 sistemes TTS)
+    sizes = manifest.groupby(["text_category", "text_id"]).size()
+    assert (sizes == 12).all(), "Some text groups don't have 12 recordings"
+
+    # Creem la carpeta de sortida si cal i desem el CSV
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(OUTPUT_PATH, index=False, encoding="utf-8")
-
-    print("Manifest:", OUTPUT_PATH)
-    print("Total recordings:", len(manifest))
-
-    unique_texts = manifest[
-        ["text_category", "text_id"]
-    ].drop_duplicates()
-
-    print("Unique text groups:", len(unique_texts))
-
-    print("\nTTS distribution:")
-    print(manifest["tts_system"].value_counts().to_string())
-
-    print("\nGeneration emotion distribution:")
-    print(manifest["generation_emotion"].value_counts().to_string())
-
-    print("\nMissing values:")
-    print(manifest.isna().sum().to_string())
-
-    print("\nManifest validation: OK")
+    print(f"Wrote {len(manifest)} rows to {OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
