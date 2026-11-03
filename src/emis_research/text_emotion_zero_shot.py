@@ -1,5 +1,16 @@
 """Evaluació ZERO-SHOT de la branca textual d'EMIS (4 classes: angry, happy, neutral, sad).
 
+FLUX GENERAL
+------------
+  manifest.csv ──► textos únics + etiqueta real (text_emotion)
+  features/<model>.csv (de text_emotion_extraction.py) ──► p_angry..p_sad per text
+        │
+        ▼
+  pred = classe amb més probabilitat (argmax)  ──►  comparar amb text_emotion
+        │
+        ▼
+  UAR (+ IC95 bootstrap), Macro-F1, Accuracy, recall per classe, matriu de confusió, prediccions per text
+
 Per cada model preentrenat: pred = argmax(p_angry, p_happy, p_neutral, p_sad). No s'entrena res amb EMIS.
 Unitat d'anàlisi: text únic (cada frase un cop). Target: `text_emotion`.
 Les etiquetes només s'usen aquí, per calcular mètriques; mai com a input dels models.
@@ -20,14 +31,21 @@ from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, recall_s
 
 ROOT = Path(__file__).resolve().parents[2]
 SEED = 42
-LABELS = ["angry", "happy", "neutral", "sad"]
+LABELS = ["angry", "happy", "neutral", "sad"]   # ordre fix de les 4 classes
 
 
 def uar(y, p):
+    """UAR (Unweighted Average Recall): mitjana dels recalls de cada classe, sense ponderar per suport.
+    Recall d'una classe = fracció de textos d'aquella classe que el model ha encertat.
+    Amb classes equilibrades coincideix amb l'accuracy."""
     return float(np.mean([(p[y == l] == l).mean() for l in LABELS if (y == l).any()]))
 
 
 def boot_ci(y, p, n_boot):
+    """Interval de confiança del 95% del UAR per bootstrap sobre text únic.
+    S'agafa una mostra aleatòria AMB reemplaçament de N textos (N = nombre de textos), es recalcula el UAR,
+    i es repeteix n_boot vegades. L'interval és el percentil 2.5 i 97.5 d'aquests UAR.
+    Amb pocs textos l'interval és ample: reflecteix la incertesa real de la mesura."""
     rng = np.random.default_rng(SEED)
     N = len(y)
     v = [uar(y[i], p[i]) for i in (rng.integers(0, N, N) for _ in range(n_boot))]
@@ -46,6 +64,7 @@ def main() -> None:
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    # PAS 1: textos únics + etiqueta real. Ha de ser el mateix conjunt (i ordre) que va usar l'extracció.
     # Unitats = textos únics (frase literal). text_emotion només per avaluar.
     man = pd.read_csv(a.manifest, dtype=str, usecols=["text", "text_emotion"])
     assert man.groupby("text")["text_emotion"].nunique().max() == 1, "mateix text amb etiquetes diferents"
@@ -57,28 +76,34 @@ def main() -> None:
     files = [f for f in sorted(Path(a.feat_dir).glob("*.csv")) if not a.models or f.stem in a.models]
     assert files, f"no hi ha features a {a.feat_dir}"
 
+    # PAS 2: per cada model, predir i calcular mètriques.
     rows, preds = [], []
     for f in files:
         name = f.stem
+        # Es uneix per la frase literal (`text`), no per posició, i validate="one_to_one" garanteix 1 fila per text.
         F = U[["text"]].merge(pd.read_csv(f), on="text", how="left", validate="one_to_one")
         pc = [f"p_{e}" for e in LABELS]
         assert F[pc].notna().all().all(), f"{f.name}: textos sense sortida"
         p = F[pc].to_numpy()
+        # Predicció zero-shot: la classe amb més probabilitat. Cap entrenament.
         pred = np.array(LABELS)[p.argmax(axis=1)]
         lo, hi = boot_ci(y, pred, a.n_boot)
-        rec = recall_score(y, pred, labels=LABELS, average=None, zero_division=0)
+        rec = recall_score(y, pred, labels=LABELS, average=None, zero_division=0)  # un recall per classe
         r = {"model": name, "n_texts": len(y), "uar": uar(y, pred), "uar_ci_lo": lo, "uar_ci_hi": hi,
              "accuracy": accuracy_score(y, pred),
              "macro_f1": f1_score(y, pred, labels=LABELS, average="macro", zero_division=0)}
         for l, rc in zip(LABELS, rec):
             r[f"recall_{l}"] = rc
-            r[f"support_{l}"] = int((y == l).sum())
+            r[f"support_{l}"] = int((y == l).sum())      # nombre de textos reals de cada classe
         rows.append(r)
+        # Matriu de confusió: files = classe real, columnes = classe predita.
         pd.DataFrame(confusion_matrix(y, pred, labels=LABELS), index=[f"true_{l}" for l in LABELS],
                      columns=[f"pred_{l}" for l in LABELS]).to_csv(out / f"confusion_zero_shot_{name}.csv")
+        # Predicció per text (per analitzar errors un a un).
         preds.append(U.assign(model=name, pred=pred, correct=(pred == y),
                               **{c: p[:, i] for i, c in enumerate(pc)}))
 
+    # PAS 3: desar i mostrar la taula, ordenada per UAR.
     M = pd.DataFrame(rows).sort_values("uar", ascending=False)
     M.to_csv(out / "metrics_zero_shot.csv", index=False)
     pd.concat(preds).to_csv(out / "predictions_zero_shot.csv", index=False)
